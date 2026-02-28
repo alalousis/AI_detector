@@ -3,9 +3,12 @@
 # -----------------------------------------------------------------------------
 import numpy as np
 import torch
+from torchmetrics import ConfusionMatrix
 from torch import nn
 from tqdm import tqdm
 import datetime as dt
+import seaborn as sns
+import matplotlib.pyplot as plt
 
 # This function returns the available devices cuda gpu, apple gpu or simple
 # cpu that will be used to train the model.
@@ -77,7 +80,7 @@ class SentimentClassifier(nn.Module):
         return self.out(output)
 
 
-def evaluate_model(model, data_loader, device, return_probabilities=False):
+def evaluate_model(model, data_loader, device, flag, return_probabilities=False):
     # Set the model evaluation environment.
     model.eval()
     # Initialize variables counting the total and correctly classified text
@@ -86,6 +89,9 @@ def evaluate_model(model, data_loader, device, return_probabilities=False):
     # Initialize the list containing the output probabilities for each text
     # instance.
     all_probabilities = []
+
+    all_predictions = torch.empty((0,), dtype=torch.int64, device=device)
+    all_labels = torch.empty((0,), dtype=torch.int64, device=device)
 
     # Indicate that no gradient-based updating of the model weight-vector will
     # be performed during this process.
@@ -115,6 +121,32 @@ def evaluate_model(model, data_loader, device, return_probabilities=False):
             # correctly classified.
             correct += (predicted == labels).sum().item()
 
+            all_predictions = torch.cat((all_predictions, predicted))
+            all_labels = torch.cat((all_labels, labels))
+
+
+    num_classes = 2  # change as needed
+
+    cm_metric = ConfusionMatrix(num_classes=num_classes, task="multiclass").to("mps")
+
+    cm = cm_metric(all_predictions, all_labels)
+
+    sns.heatmap(cm.cpu().numpy(),
+                annot=True,
+                fmt='g',
+                xticklabels=['Human', 'Bot'],
+                yticklabels=['Human', 'Bot'])
+    plt.ylabel('Actual', fontsize=13)
+    plt.title(f'Confusion Matrix {flag}', fontsize=17, pad=20)
+    plt.gca().xaxis.set_label_position('top')
+    plt.xlabel('Prediction', fontsize=13)
+    plt.gca().xaxis.tick_top()
+
+    plt.gca().figure.subplots_adjust(bottom=0.2)
+    plt.gca().figure.text(0.5, 0.05, 'Prediction', ha='center', fontsize=13)
+    plt.savefig(f"images/confusion_matrix_{flag}.png", dpi=300, bbox_inches="tight")
+    plt.show()
+
     # Compute the total accuracy of the model on the subset of text instances
     # stored in the data loader.
     accuracy = correct / total
@@ -126,7 +158,7 @@ def evaluate_model(model, data_loader, device, return_probabilities=False):
 #                          MODEL TRAINING PROCESS:
 # -----------------------------------------------------------------------------
 
-def train_model(model, train_loader, test_loader, optimizer, loss_fn, epochs, device,
+def train_model(model, train_loader, test_loader, optimizer, loss_fn, epochs, device, results_folder,
                 checkpoint_path=None, batch_save_period=None):
     # Load the state variables from the last training session.
     global datetime
@@ -192,9 +224,9 @@ def train_model(model, train_loader, test_loader, optimizer, loss_fn, epochs, de
         # all the batches that have been completed by the previous session.
         batch_count = 0
         # Evaluate the train accuracy of the model after each epoch.
-        train_accuracy = evaluate_model(model, train_loader, device)
+        train_accuracy = evaluate_model(model, train_loader, device, flag="train")
         # Evaluate the model on the test set after each epoch.
-        test_accuracy = evaluate_model(model, test_loader, device)
+        test_accuracy = evaluate_model(model, test_loader, device, flag="test")
         # Save final checkpoint after each training epoch has been completed.
         torch.save({
             'epoch': epoch,
@@ -206,11 +238,10 @@ def train_model(model, train_loader, test_loader, optimizer, loss_fn, epochs, de
         }, checkpoint_path)
 
         datetime = dt.datetime.now()
-        history_file_path = f"/Users/alalousis/PycharmProjects/AI_detector/results/checkpoint_{datetime}.txt"
+        results_path = f"{results_folder}/checkpoint_{datetime}.txt"
 
-        with open(history_file_path, 'w') as file:
+        with open(results_path, 'w') as file:
             file.write(f"epoch: {epoch+1}\n")
-            file.write(f"batch_count: {batch_count}\n")
             file.write(f"train_accuracy: {train_accuracy}\n")
             file.write(f"test_accuracy: {test_accuracy}\n")
 
